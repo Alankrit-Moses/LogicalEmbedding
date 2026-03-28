@@ -3,12 +3,10 @@
 #SBATCH --output=logs/train_%j.out
 #SBATCH --error=logs/train_%j.err
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=64G
-#SBATCH --gres=gpu:h100:2             # Request 2 H100s (adjust 1-4 as needed)
+#SBATCH --gres=gpu:2             # Request 2 H100s (adjust 1-4 as needed)
 #SBATCH --time=12:00:00
-#SBATCH --partition=gpu               # Replace with your cluster's partition name
+#SBATCH --partition=defq               # Replace with your cluster's partition name
 
 # 1. Load Modules (if required by your cluster)
 # module load cuda/12.1
