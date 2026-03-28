@@ -22,6 +22,14 @@ export NNODES=$SLURM_NNODES
 export MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
 export MASTER_PORT=12345
 
+# Fix NCCL and GPU isolation
+export NCCL_DEBUG=INFO
+export NCCL_IB_DISABLE=0
+export NCCL_NET_GDR_LEVEL=2
+# Ensure each process only sees the GPUs allocated to it
+# On many clusters, this is handled by SLURM, but explicitly setting it helps torchrun
+export CUDA_VISIBLE_DEVICES=0,1,2,3
+
 # 4. Launch Training
 # Using your preferred srun + torchrun pattern
 srun --mpi=none torchrun \

@@ -25,14 +25,20 @@ def main():
     args = parser.parse_args()
     
     # Initialize Accelerator
-    accelerator = Accelerator(log_with="tensorboard", project_dir="logs")
-    accelerator.init_trackers("plm_training", config=vars(args))
+    # We disable tensorboard logging temporarily to avoid TensorFlow/cuBLAS conflicts seen in logs
+    accelerator = Accelerator()
     
-    # Setup Device
+    # Setup Device explicitly
     device = accelerator.device
+    torch.cuda.set_device(device)
     
+    if accelerator.is_local_main_process:
+        print(f"Running on {accelerator.num_processes} GPUs")
+        print(f"Device: {device}")
+
     # 1. Model
-    model = PLMModel(model_name=args.model_name)
+    # Move model to device before preparation to be safe
+    model = PLMModel(model_name=args.model_name).to(device)
     
     # 2. Loss and Optimizer
     criterion = PLMLoss(k=args.k, m_min=args.m_min, alpha=args.alpha, beta=args.beta, gamma=args.gamma)
