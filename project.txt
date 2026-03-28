@@ -1,0 +1,90 @@
+TECHNICAL SPECIFICATION: THE POLAR LOGIC MANIFOLD (PLM)
+1. RESEARCH MOTIVATION: SEMANTIC VS. LOGICAL SPACE
+Standard embedding models (e.g., SBERT) optimize for Topical Relatedness via statistical co-occurrence. In these spaces, proximity denotes that two sentences share a "neighborhood" of meaning.
+
+The Problem:
+In high-precision retrieval, semantic similarity is often a "trap." Logical opposites (e.g., "The treatment is effective" vs. "The treatment is lethal") inhabit the same semantic cluster. Standard models find the Topic, but they cannot distinguish the Truth.
+
+The Solution:
+The Polar Logic Manifold (PLM) warps the latent space so that:
+
+Direction (Angle) represents the Logical Truth Relationship.
+
+Magnitude (Length) represents Information Specificity/Density.
+
+2. MODEL ARCHITECTURE: THE 12+4 BOTTLENECK
+To preserve general language understanding while learning specialized logic, we use a hybrid "Frozen Backbone + Trainable Head" design.
+
+FROZEN BACKBONE (Layers 1-12): A pre-trained BERT-base-uncased model. All weights are frozen (requires_grad=False). This preserves the "Semantic Grounding" (e.g., knowing "physician" and "doctor" are related).
+
+THE <C> (CONSTRAINT) TOKEN: A fresh, randomly initialized, trainable embedding injected at the input of Layer 13. It replaces or supplements the standard [CLS] token to act as a dedicated aggregator for logical features.
+
+THE TRAINABLE HEAD (Layers 13-16): Four custom Transformer Encoder layers (768-dim) with residual connections. These layers are the only trainable parameters. They project the frozen semantic features into the final Polar Manifold.
+
+3. GEOMETRIC CONSTRAINTS (TRAINING PHASE)
+The model is supervised using NLI datasets (SNLI, MNLI) to enforce specific topological rules.
+
+A. ANGULAR POLARITY (THETA)
+The loss function targets three "Hard" polar coordinates to define the truth-relationship:
+
+Entailment (A -> B): Target Theta = 0 degrees (Cosine Similarity = 1.0).
+
+Neutral (A | B): Target Theta = 90 degrees (Cosine Similarity = 0.0).
+
+Contradiction (A ! B): Target Theta = 180 degrees (Cosine Similarity = -1.0).
+
+B. MAGNITUDE LOGIC (||V||)
+Magnitude represents the Informativeness of a statement.
+
+Asymmetric Entailment (Specific -> General): If A entails B but B does not entail A, then A is more informative.
+
+Constraint: ||A|| - ||B|| > k (where k is a margin).
+
+Loss: L_spec = max(0, k - (||A|| - ||B||))
+
+Bidirectional Equivalence (A <-> B): If A and B are paraphrases, they carry the same information density.
+
+Constraint: ||A|| approx. ||B||.
+
+Loss: L_equiv = abs(||A|| - ||B||)
+
+Minimum Norm: All vectors must maintain a minimum magnitude (m_min) to keep the polar space active.
+
+4. THE EMERGENT SPREAD (INFERENCE PHASE)
+While training uses hard targets (0, 90, 180), the resulting manifold is a continuous probability distribution. This "Spread" allows the model to handle uncertainty (e.g., ChaosNLI).
+
+The Angular Interpretability:
+
+[0, 45) deg: Leaning Entailment. (Certainty increases as angle approaches 0).
+
+[45, 90) deg: Leaning Neutral. (Transition from support to independence).
+
+(90, 135] deg: Leaning Neutral. (Transition from independence to logical tension).
+
+(135, 180] deg: Leaning Contradiction. (Certainty increases as angle approaches 180).
+
+5. DATASET-DRIVEN VALIDATION
+The manifold architecture is designed to solve specific dataset-defined problems:
+
+SNLI/MNLI: Establishes the primary 0/90/180 poles across multiple genres.
+
+HANS: Proves the model uses syntactic logic rather than word-overlap (Heuristic Analysis).
+
+VITAMINC: Proves the 4-layer head can detect "micro-edits" that flip logical truth.
+
+CHAOSNLI: Proves that the angular spread correlates with human disagreement/ambiguity.
+
+6. IMPLEMENTATION SUMMARY FOR CODING
+Base Model: bert-base-uncased (HuggingFace).
+
+Layer Split: Freeze bert.encoder.layer[:12]. Train bert.encoder.layer[12:].
+
+Special Token: Initialize a nn.Parameter for the <C> token. In the forward pass, concatenate this token to the hidden states at Layer 13.
+
+Loss Function:
+
+Angular: nn.CosineEmbeddingLoss() or a custom Polar Cross-Entropy.
+
+Magnitude: Hinge-margin loss for ||A|| - ||B|| > k.
+
+Optimization: Use a large batch size (via 4x H100s or Gradient Accumulation) to ensure the 90-degree "Neutral" zone is well-defined by diverse negative samples.
