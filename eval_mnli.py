@@ -62,4 +62,4 @@ def evaluate_in_distribution(checkpoint_path, batch_size=128):
 
 if __name__ == "__main__":
     # Point this to your best Smooth L1 checkpoint
-    evaluate_in_distribution("checkpoints/plm_epoch_1.pt")
+    evaluate_in_distribution("checkpoints/plm_epoch_5.pt")
