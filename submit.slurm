@@ -8,17 +8,28 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --time=24:00:00
 
-# Safety check: Ensure directories exist so Slurm doesn't crash silently
+# 1. Activate Conda Environment safely inside a Slurm batch script
+eval "$(conda shell.bash hook)"
+conda activate torch-env
+
+# Safety check: Ensure directories exist
 mkdir -p logs checkpoints
 
-nodes=( $( scontrol show hostnames $SLURM_JOB_NODELIST ) )
-nodes_array=($nodes)
-head_node=${nodes_array[0]}
-head_node_ip=$(srun --nodes=1 --ntasks=1 -w "$head_node" hostname --ip-address)
+# 2. Extract Master Node IP (Simplified for Single Node)
+# Since you are requesting exactly 1 node, we don't need srun to ask for the IP.
+# We can just ask the machine directly, bypassing the first MPI error.
+head_node_ip=$(hostname -I | awk '{print $1}')
 
 export MASTER_ADDR=$head_node_ip
 export MASTER_PORT=29500
 export WORLD_SIZE=$SLURM_NTASKS
 
-echo "Starting distributed training on $WORLD_SIZE GPUs..."
-srun python train.py
+# 3. Disable MPI to fix the 'pmix_v3' crash
+export SLURM_MPI_TYPE=none
+
+echo "Starting distributed training on $WORLD_SIZE GPUs at $head_node_ip..."
+
+# 4. Launch the Training Script using srun
+# Adding --mpi=none forces srun to launch the processes nakedly, 
+# letting PyTorch's NCCL handle the communication.
+srun --mpi=none python train.py
