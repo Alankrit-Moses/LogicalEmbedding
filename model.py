@@ -52,28 +52,44 @@ class PolarLogicManifold(nn.Module):
 
 
 class AngularMagnitudeLoss(nn.Module):
-    def __init__(self, margin=1.0, mag_weight=0.5):
+    def __init__(self, margin=1.0, mag_weight=0.5, temperature=0.1):
         super().__init__()
         self.margin = margin
         self.mag_weight = mag_weight
+        self.temperature = temperature # Controls the strictness of the polar clustering
 
     def forward(self, v_p, v_h, labels):
-        # 1. Angular Loss
+        # --- 1. ANGULAR LOSS (Temperature-Scaled Cross-Entropy) ---
         cos_sim = F.cosine_similarity(v_p, v_h, dim=-1)
-        target_cos = torch.where(labels == 0, torch.tensor(1.0, device=v_p.device),
-                     torch.where(labels == 1, torch.tensor(0.0, device=v_p.device),
-                                              torch.tensor(-1.0, device=v_p.device)))
         
-        loss_ang = F.mse_loss(cos_sim, target_cos)
+        # Calculate the squared distance from the current cosine similarity 
+        # to the three ideal polar targets: 1.0 (Entailment), 0.0 (Neutral), -1.0 (Contradiction).
+        # We negate the distance so that the closest pole becomes the highest logit.
+        # Dividing by temperature sharpens the distribution, punishing "middle-ground" guesses.
+        logits = torch.stack([
+            -((cos_sim - 1.0) / self.temperature)**2,   # Class 0: Entailment
+            -((cos_sim - 0.0) / self.temperature)**2,   # Class 1: Neutral
+            -((cos_sim - (-1.0)) / self.temperature)**2 # Class 2: Contradiction
+        ], dim=1)
+        
+        # CrossEntropy forces the model to confidently select one pole rather than hedging.
+        loss_ang = F.cross_entropy(logits, labels)
 
-        # 2. Magnitude Loss (Only applied when Premise entails Hypothesis)
+        # --- 2. MAGNITUDE LOSS (Information Density) ---
+        # Only applied when Premise entails Hypothesis (Class 0)
         mag_p = torch.norm(v_p, dim=-1)
         mag_h = torch.norm(v_h, dim=-1)
         
         entail_mask = (labels == 0).float()
+        
+        # Hinge Loss: We want ||P|| to be greater than ||H|| by at least the margin
         mag_diff = mag_p - mag_h
         hinge = F.relu(self.margin - mag_diff)
         
+        # Average the magnitude loss only over the valid entailment samples
         loss_mag = (hinge * entail_mask).sum() / (entail_mask.sum() + 1e-8)
         
-        return loss_ang + (self.mag_weight * loss_mag), loss_ang, loss_mag
+        # Total Weighted Loss
+        total_loss = loss_ang + (self.mag_weight * loss_mag)
+        
+        return total_loss, loss_ang, loss_mag
