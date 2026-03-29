@@ -1,61 +1,79 @@
 import torch
 import torch.nn as nn
-from transformers import BertModel, BertConfig
+import torch.nn.functional as F
+from transformers import BertModel
 
-class PLMModel(nn.Module):
-    def __init__(self, model_name='bert-base-uncased', num_extra_layers=4, hidden_size=768):
-        super(PLMModel, self).__init__()
+class PolarLogicManifold(nn.Module):
+    def __init__(self, model_name='bert-base-uncased', num_logic_layers=4):
+        super().__init__()
         
-        # 1. Frozen Backbone (Layers 1-12)
-        self.backbone = BertModel.from_pretrained(model_name)
-        for param in self.backbone.parameters():
+        # 1. Frozen Semantic Backbone (Layers 0-11)
+        self.bert = BertModel.from_pretrained(model_name)
+        for param in self.bert.parameters():
             param.requires_grad = False
             
-        # 2. Constraint <C> Token
-        # Initialized as a trainable parameter
-        self.c_token = nn.Parameter(torch.randn(1, 1, hidden_size))
+        # 2. Trainable <C> Token
+        self.hidden_size = self.bert.config.hidden_size
+        self.c_token = nn.Parameter(torch.randn(1, 1, self.hidden_size))
         
-        # 3. Trainable Head (Layers 13-16)
-        # Using standard Transformer Encoder layers
+        # 3. Trainable Logic Head (Layers 12-15)
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=hidden_size,
-            nhead=12,  # Matching BERT-base configuration
-            dim_feedforward=3072,  # Matching BERT-base configuration
-            batch_first=True,
-            activation='gelu'
+            d_model=self.hidden_size, 
+            nhead=12, 
+            dim_feedforward=self.hidden_size * 4,
+            activation='gelu',
+            batch_first=True
         )
-        self.trainable_head = nn.TransformerEncoder(encoder_layer, num_layers=num_extra_layers)
+        self.logic_head = nn.TransformerEncoder(encoder_layer, num_layers=num_logic_layers)
+
+    def forward(self, input_ids, attention_mask):
+        batch_size = input_ids.size(0)
         
-    def forward(self, input_ids, attention_mask=None, token_type_ids=None):
-        # Pass through the frozen backbone
-        # We need the full hidden states or at least the last layer's output
+        # Phase 1: Frozen Features
         with torch.no_grad():
-            outputs = self.backbone(input_ids, attention_mask=attention_mask, token_type_ids=token_type_ids)
-            sequence_output = outputs.last_hidden_state  # [batch_size, seq_len, hidden_size]
+            outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
+            hidden_states = outputs.last_hidden_state
             
-        # Inject <C> token
-        batch_size = sequence_output.size(0)
-        c_tokens = self.c_token.expand(batch_size, -1, -1)  # [batch_size, 1, hidden_size]
+        # Phase 2: Token Injection (Layout A: [C] + [CLS] + Words)
+        c_tokens = self.c_token.expand(batch_size, -1, -1)
+        new_hidden = torch.cat([c_tokens, hidden_states], dim=1)
         
-        # Prepend <C> token to the sequence
-        # We also need to update the attention mask for the extra token
-        extended_sequence = torch.cat((c_tokens, sequence_output), dim=1)  # [batch_size, seq_len + 1, hidden_size]
+        c_mask = torch.ones((batch_size, 1), device=input_ids.device, dtype=attention_mask.dtype)
+        new_mask = torch.cat([c_mask, attention_mask], dim=1)
         
-        if attention_mask is not None:
-            # Prepend a '1' to the attention mask for the <C> token
-            c_mask = torch.ones((batch_size, 1), device=attention_mask.device)
-            extended_attention_mask = torch.cat((c_mask, attention_mask), dim=1)
-        else:
-            extended_attention_mask = None
-            
-        # Pass through the trainable head
-        # TransformerEncoder expects src_key_padding_mask as (batch, seq_len) bool where True is padding
-        padding_mask = (extended_attention_mask == 0) if extended_attention_mask is not None else None
+        # PyTorch requires True for ignored padding tokens
+        src_key_padding_mask = (new_mask == 0)
         
-        head_output = self.trainable_head(extended_sequence, src_key_padding_mask=padding_mask)
+        # Phase 3: Logical Projection
+        logic_outputs = self.logic_head(new_hidden, src_key_padding_mask=src_key_padding_mask)
         
-        # Extract the <C> token output as the embedding
-        # It was prepended, so it's at index 0
-        embeddings = head_output[:, 0, :]
+        # Extract the <C> token (Index 0)
+        return logic_outputs[:, 0, :]
+
+
+class AngularMagnitudeLoss(nn.Module):
+    def __init__(self, margin=1.0, mag_weight=0.5):
+        super().__init__()
+        self.margin = margin
+        self.mag_weight = mag_weight
+
+    def forward(self, v_p, v_h, labels):
+        # 1. Angular Loss
+        cos_sim = F.cosine_similarity(v_p, v_h, dim=-1)
+        target_cos = torch.where(labels == 0, torch.tensor(1.0, device=v_p.device),
+                     torch.where(labels == 1, torch.tensor(0.0, device=v_p.device),
+                                              torch.tensor(-1.0, device=v_p.device)))
         
-        return embeddings
+        loss_ang = F.mse_loss(cos_sim, target_cos)
+
+        # 2. Magnitude Loss (Only applied when Premise entails Hypothesis)
+        mag_p = torch.norm(v_p, dim=-1)
+        mag_h = torch.norm(v_h, dim=-1)
+        
+        entail_mask = (labels == 0).float()
+        mag_diff = mag_p - mag_h
+        hinge = F.relu(self.margin - mag_diff)
+        
+        loss_mag = (hinge * entail_mask).sum() / (entail_mask.sum() + 1e-8)
+        
+        return loss_ang + (self.mag_weight * loss_mag), loss_ang, loss_mag
